@@ -1,20 +1,26 @@
 // ============================================================
 // Sign in
 //
-// A magic link rather than a password: you type your email, we send a link,
-// clicking it signs you in on that device. Nothing to remember, nothing to
-// leak. Signing in on a second device pulls the same history down.
+// No password: you type your email and we send one message containing both a
+// link and a six-digit code. Either signs you in.
+//
+// The code is not a fallback, it is the only thing that works from a home
+// screen icon. iOS gives a home-screen app its own storage, separate from
+// Safari, so tapping the link signs you in inside Safari and leaves the app
+// itself still signed out. Typing the code signs in wherever it is typed.
 // ============================================================
 
 import React, { useState } from "react";
 import { FONT, TYPE, THEME } from "./kernel/theme.js";
-import { signInWithEmail } from "./kernel/sync.js";
+import { signInWithEmail, verifyEmailCode, isStandalone } from "./kernel/sync.js";
 
 export default function Auth({ theme }) {
   const c = THEME[theme];
   const [email, setEmail] = useState("");
-  const [state, setState] = useState("idle"); // idle | sending | sent | error
+  const [state, setState] = useState("idle"); // idle | sending | sent | verifying | error
   const [message, setMessage] = useState("");
+  const [code, setCode] = useState("");
+  const standalone = isStandalone();
 
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
 
@@ -28,8 +34,22 @@ export default function Auth({ theme }) {
       setMessage(error.message || "That did not send. Try again in a moment.");
     } else {
       setState("sent");
-      setMessage("Check " + email.trim() + " and click the link. You can close this tab.");
+      setMessage("");
     }
+  };
+
+  const codeValid = /^\d{6}$/.test(code.trim());
+
+  const verify = async (e) => {
+    e.preventDefault();
+    if (!codeValid || state === "verifying") return;
+    setState("verifying");
+    const { error } = await verifyEmailCode(email.trim(), code.trim());
+    if (error) {
+      setState("sent");
+      setMessage(error.message || "That code was not accepted. Check it and try again.");
+    }
+    // On success the auth listener swaps this panel out; nothing to do here.
   };
 
   const panel = {
@@ -48,13 +68,42 @@ export default function Auth({ theme }) {
     opacity: valid ? 1 : 0.5, whiteSpace: "nowrap",
   };
 
-  if (state === "sent") {
+  if (state === "sent" || state === "verifying") {
     return (
       <div style={panel}>
         <div style={{ color: c.good, fontSize: TYPE.body, fontWeight: 600, marginBottom: "6px" }}>
-          Link sent
+          Sent to {email.trim()}
         </div>
-        <div style={{ color: c.muted, fontSize: TYPE.small }}>{message}</div>
+        <div style={{ color: c.muted, fontSize: TYPE.small, marginBottom: "12px" }}>
+          {standalone
+            ? "Enter the six-digit code from the email. The link in it will not sign you in here, because this app has its own storage separate from Safari."
+            : "Enter the six-digit code from the email, or tap the link in it."}
+        </div>
+        <form onSubmit={verify} style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="\d{6}"
+            maxLength={6}
+            placeholder="123456"
+            value={code}
+            onChange={(e) => { setCode(e.target.value.replace(/\D/g, "")); if (message) setMessage(""); }}
+            style={{ ...input, flex: "1 1 140px", letterSpacing: "4px", fontWeight: 600 }}
+          />
+          <button type="submit" disabled={!codeValid || state === "verifying"}
+            style={{ ...button, cursor: codeValid ? "pointer" : "not-allowed", opacity: codeValid ? 1 : 0.5 }}>
+            {state === "verifying" ? "Checking..." : "Sign in"}
+          </button>
+        </form>
+        {message && (
+          <div style={{ color: c.danger, fontSize: TYPE.small, marginTop: "10px" }}>{message}</div>
+        )}
+        <button onClick={() => { setState("idle"); setCode(""); setMessage(""); }}
+          style={{ background: "none", border: "none", color: c.faint, fontFamily: FONT,
+            fontSize: TYPE.small, padding: "10px 0 0", cursor: "pointer", textDecoration: "underline" }}>
+          Use a different email
+        </button>
       </div>
     );
   }

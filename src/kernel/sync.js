@@ -185,3 +185,24 @@ export function mergeEntries(remote, queue) {
 }
 
 export const readQueueRaw = readQueue;
+
+// The same email carries a six-digit code as well as a link. On iOS a
+// home-screen app has its own storage, separate from Safari, so tapping the
+// link signs you in inside Safari and leaves the app still signed out.
+// Typing the code signs in wherever it is typed, which is the only thing that
+// works from a home-screen icon.
+export async function verifyEmailCode(email, token) {
+  if (!supabase) return { error: new Error("Sync is not configured.") };
+  const { error } = await supabase.auth.verifyOtp({
+    email,
+    token: String(token).trim(),
+    type: "email",
+  });
+  return { error };
+}
+
+// True when running from the home screen rather than a browser tab.
+export const isStandalone = () =>
+  typeof window !== "undefined" &&
+  (window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches));
