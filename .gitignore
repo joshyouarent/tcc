@@ -1,3 +1,9 @@
 node_modules
 dist
 .DS_Store
+
+# Local environment files. VITE_ values are embedded in the client
+# bundle and are public by design, but keys still do not belong in git.
+.env
+.env.*
+!.env.example
