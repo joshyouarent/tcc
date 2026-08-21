@@ -1,12 +1,18 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Chart from "./kernel/Chart.jsx";
 import { scoreValue, progress, zoneOf, SHAPES } from "./kernel/scoring.js";
 import { FONT, TYPE, THEME } from "./kernel/theme.js";
 import {
-  loadConfig, saveConfig, loadEntries, setEntry, valueFor,
+  loadConfig, saveConfig, loadEntries, saveEntries, setEntry, valueFor,
   today, addDays, daysBack, WINDOWS, ROLLUPS,
 } from "./kernel/store.js";
 import { DOMAINS, defaultConfig } from "./domains.js";
+import Auth from "./Auth.jsx";
+import {
+  configured, currentSession, onAuthChange, signOut,
+  pullAll, mergeEntries, flush, queueEntry, queueConfig,
+  pendingCount, readQueueRaw,
+} from "./kernel/sync.js";
 
 const SCALES = [
   { id: "now", name: "Now", days: 1 },
@@ -34,7 +40,76 @@ export default function App() {
   const [setup, setSetup] = useState(false);
   const [date, setDate] = useState(today());
 
-  useEffect(() => { saveConfig(config); }, [config]);
+  // ---- sync state
+  const [session, setSession] = useState(null);
+  const [pending, setPending] = useState(() => (configured ? pendingCount() : 0));
+  const [pulling, setPulling] = useState(false);
+  const userId = session && session.user ? session.user.id : null;
+
+  // Refs so the config effect can see the current user without re-firing on
+  // sign-in, and so hydration does not push what it just pulled back up.
+  const userIdRef = useRef(null);
+  const hydrating = useRef(false);
+  const firstConfig = useRef(true);
+  useEffect(() => { userIdRef.current = userId; }, [userId]);
+
+  const refreshPending = () => setPending(configured ? pendingCount() : 0);
+
+  // Watch the session. detectSessionInUrl means clicking the emailed link
+  // lands here already signed in.
+  useEffect(() => {
+    if (!configured) return;
+    let alive = true;
+    currentSession().then((s) => { if (alive) setSession(s); });
+    const stop = onAuthChange((s) => setSession(s));
+    return () => { alive = false; stop(); };
+  }, []);
+
+  // On sign-in: send anything queued, then pull the server's copy and merge
+  // whatever this device still has in flight over the top of it.
+  useEffect(() => {
+    if (!configured || !userId) return;
+    let alive = true;
+    setPulling(true);
+    (async () => {
+      await flush(userId);
+      const remote = await pullAll(userId);
+      if (!alive) return;
+      if (remote) {
+        hydrating.current = true;
+        const merged = mergeEntries(remote.entries, readQueueRaw());
+        saveEntries(merged);
+        setEntries(merged);
+        if (remote.config && remote.config.metrics) setConfig(remote.config);
+        setTimeout(() => { hydrating.current = false; }, 0);
+      }
+      refreshPending();
+      setPulling(false);
+    })();
+    return () => { alive = false; };
+  }, [userId]);
+
+  // Retry the queue when the device comes back online.
+  useEffect(() => {
+    if (!configured) return;
+    const retry = () => {
+      const id = userIdRef.current;
+      if (id) flush(id).then(refreshPending);
+    };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, []);
+
+  useEffect(() => {
+    saveConfig(config);
+    if (firstConfig.current) { firstConfig.current = false; return; }
+    if (hydrating.current) return;
+    const id = userIdRef.current;
+    if (!configured || !id) return;
+    queueConfig(config);
+    refreshPending();
+    flush(id).then(refreshPending);
+  }, [config]);
 
   const metrics = config.metrics || [];
   const activeIn = (domainId) => metrics.filter((m) => m.domain === domainId && m.on);
@@ -48,7 +123,17 @@ export default function App() {
     return scores.reduce((a, b) => a + b, 0) / scores.length;
   };
 
-  const log = (metricId, value) => setEntries((prev) => setEntry(prev, date, metricId, value));
+  // Local first so the chart moves immediately, then queued for the server.
+  const log = (metricId, value) => {
+    setEntries((prev) => setEntry(prev, date, metricId, value));
+    if (!configured) return;
+    const blank = value === "" || value == null;
+    const num = Number(value);
+    queueEntry(date, metricId, blank || Number.isNaN(num) ? null : num);
+    refreshPending();
+    const id = userIdRef.current;
+    if (id) flush(id).then(refreshPending);
+  };
 
   const toggleMetric = (id) => setConfig({
     ...config,
@@ -111,6 +196,9 @@ export default function App() {
           <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={chip(false)}>
             {theme === "dark" ? "Light" : "Dark"}
           </button>
+          {configured && session && (
+            <button onClick={() => signOut()} style={chip(false)}>Sign out</button>
+          )}
         </div>
       </div>
 
@@ -120,6 +208,8 @@ export default function App() {
           <button key={d.id} onClick={() => setTab(d.id)} style={chip(tab === d.id)}>{d.app}</button>
         ))}
       </div>
+
+      {configured && !session && <Auth theme={theme} />}
 
       {setup && (
         <div style={{ ...panel, borderRadius: "10px", padding: "14px", marginBottom: "14px" }}>
@@ -289,7 +379,15 @@ export default function App() {
       )}
 
       <div style={{ color: c.faint, fontSize: TYPE.micro, marginTop: "20px", textAlign: "center" }}>
-        Saved on this device. Yesterday carries into today.
+        {!configured
+          ? "Saved on this device. Yesterday carries into today."
+          : !session
+            ? "Saved on this device. Sign in to carry it across your devices."
+            : pulling
+              ? "Catching up with your other devices..."
+              : pending > 0
+                ? `Saved. ${pending} change${pending === 1 ? "" : "s"} waiting to sync.`
+                : `Synced to ${session.user.email}. Yesterday carries into today.`}
       </div>
     </div>
   );
