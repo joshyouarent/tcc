@@ -48,3 +48,21 @@ create policy "config is private"
   to authenticated
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ============================================================
+-- Data API grants
+--
+-- The project is set to NOT expose new tables automatically, so nothing is
+-- reachable over the API until it is granted here. Only the authenticated
+-- role is granted: the anon role never touches these tables, so an unsigned-in
+-- browser cannot read a single row even before RLS is considered.
+--
+-- RLS still decides WHICH rows. These grants only decide which tables exist
+-- as far as the API is concerned.
+-- ============================================================
+
+grant select, insert, update, delete on public.entries to authenticated;
+grant select, insert, update, delete on public.configs to authenticated;
+
+revoke all on public.entries from anon;
+revoke all on public.configs from anon;
