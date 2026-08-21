@@ -49,9 +49,11 @@ export default function App() {
   // Refs so the config effect can see the current user without re-firing on
   // sign-in, and so hydration does not push what it just pulled back up.
   const userIdRef = useRef(null);
+  const configRef = useRef(config);
   const hydrating = useRef(false);
   const firstConfig = useRef(true);
   useEffect(() => { userIdRef.current = userId; }, [userId]);
+  useEffect(() => { configRef.current = config; }, [config]);
 
   const refreshPending = () => setPending(configured ? pendingCount() : 0);
 
@@ -80,7 +82,15 @@ export default function App() {
         const merged = mergeEntries(remote.entries, readQueueRaw());
         saveEntries(merged);
         setEntries(merged);
-        if (remote.config && remote.config.metrics) setConfig(remote.config);
+        if (remote.config && remote.config.metrics) {
+          setConfig(remote.config);
+        } else {
+          // Nothing on the server yet. Seed it with this device's setup, so a
+          // second device inherits your metrics rather than starting on the
+          // defaults and quietly disagreeing about what is switched on.
+          queueConfig(configRef.current);
+          await flush(userId);
+        }
         setTimeout(() => { hydrating.current = false; }, 0);
       }
       refreshPending();
