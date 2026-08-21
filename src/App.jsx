@@ -6,7 +6,7 @@ import {
   loadConfig, saveConfig, loadEntries, saveEntries, setEntry, valueFor,
   today, addDays, daysBack, WINDOWS, ROLLUPS,
 } from "./kernel/store.js";
-import { DOMAINS, defaultConfig } from "./domains.js";
+import { DOMAINS, defaultConfig, mergeLibrary, MUSCLE_GROUPS } from "./domains.js";
 import Auth from "./Auth.jsx";
 import {
   configured, currentSession, onAuthChange, signOut,
@@ -33,7 +33,7 @@ export default function App() {
   }, []);
   const c = THEME[theme];
 
-  const [config, setConfig] = useState(() => loadConfig(defaultConfig()));
+  const [config, setConfig] = useState(() => mergeLibrary(loadConfig(defaultConfig())));
   const [entries, setEntries] = useState(() => loadEntries());
   const [tab, setTab] = useState("home");
   const [scale, setScale] = useState("now");
@@ -83,7 +83,8 @@ export default function App() {
         saveEntries(merged);
         setEntries(merged);
         if (remote.config && remote.config.metrics) {
-          setConfig(remote.config);
+          // Merge too: a config saved before a metric existed must still gain it.
+          setConfig(mergeLibrary(remote.config));
         } else {
           // Nothing on the server yet. Seed it with this device's setup, so a
           // second device inherits your metrics rather than starting on the
@@ -123,6 +124,21 @@ export default function App() {
 
   const metrics = config.metrics || [];
   const activeIn = (domainId) => metrics.filter((m) => m.domain === domainId && m.on);
+
+  // Setup lists a domain's metrics in order, with a heading wherever a group
+  // starts. Ungrouped metrics keep their existing flat presentation, so only
+  // the sixteen muscles gain headings.
+  const groupedRows = (domainId) => {
+    const rows = [];
+    let last = null;
+    for (const m of metrics.filter((x) => x.domain === domainId)) {
+      const g = m.group || null;
+      if (g && g !== last) rows.push({ header: g });
+      last = g;
+      rows.push({ m });
+    }
+    return rows;
+  };
 
   // A domain scores the mean of whatever you have switched on inside it.
   const domainScore = (domainId, endDate = today()) => {
@@ -231,7 +247,12 @@ export default function App() {
           {DOMAINS.map((d) => (
             <div key={d.id} style={{ marginBottom: "16px" }}>
               <div style={{ ...head, marginBottom: "8px" }}>{d.name}</div>
-              {metrics.filter((m) => m.domain === d.id).map((m) => (
+              {groupedRows(d.id).map((row) => row.header ? (
+                <div key={`grp-${d.id}-${row.header}`} style={{ color: c.ring, fontSize: TYPE.micro,
+                  letterSpacing: "2px", fontWeight: 700, margin: "16px 0 8px" }}>
+                  {row.header.toUpperCase()}
+                </div>
+              ) : (() => { const m = row.m; return (
                 <div key={m.id} style={{ border: `1px solid ${c.line}`, borderRadius: "8px",
                   padding: "10px", marginBottom: "8px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
@@ -274,7 +295,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              ))}
+              ); })())}
             </div>
           ))}
         </div>
